@@ -3,7 +3,7 @@ from threading import Thread
 from typing import Iterator
 
 import gradio as gr
-import spaces
+from gradio import spaces
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
