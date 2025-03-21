@@ -3,34 +3,34 @@ from threading import Thread
 from typing import Iterator
 
 import gradio as gr
-from gradio import spaces
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
 MAX_MAX_NEW_TOKENS = 2048
 DEFAULT_MAX_NEW_TOKENS = 1024
-
 MAX_INPUT_TOKEN_LENGTH = int(os.getenv("MAX_INPUT_TOKEN_LENGTH", "4096"))
 
 DESCRIPTION = """\
 # DeepSeek-6.7B-Chat
 
-This Space demonstrates model [DeepSeek-Coder](https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct) by DeepSeek, a code model with 6.7B parameters fine-tuned for chat instructions.
+This Space demonstrates model [DeepSeek-Coder](https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct) by DeepSeek.
 """
 
 if not torch.cuda.is_available():
     DESCRIPTION += "\n<p>Running on CPU 🥶 This demo does not work on CPU.</p>"
 
-
 if torch.cuda.is_available():
     model_id = "deepseek-ai/deepseek-coder-6.7b-instruct"
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, device_map="auto")
+    # Use float16 for better memory efficiency
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=torch.float16,  # Changed to float16
+        device_map="auto"
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.use_default_system_prompt = False
-    
 
-
-@spaces.GPU
+#@spaces.GPU  # Comment/remove this if running locally
 def generate(
     message: str,
     chat_history: list,
@@ -48,31 +48,38 @@ def generate(
         conversation.extend([{"role": "user", "content": user}, {"role": "assistant", "content": assistant}])
     conversation.append({"role": "user", "content": message})
 
-    input_ids = tokenizer.apply_chat_template(conversation, return_tensors="pt", add_generation_prompt=True)
+    input_ids = AutoTokenizer.apply_chat_template(conversation, return_tensors="pt", add_generation_prompt=True)
     if input_ids.shape[1] > MAX_INPUT_TOKEN_LENGTH:
         input_ids = input_ids[:, -MAX_INPUT_TOKEN_LENGTH:]
-        gr.Warning(f"Trimmed input from conversation as it was longer than {MAX_INPUT_TOKEN_LENGTH} tokens.")
+        print(f"Trimmed input from {MAX_INPUT_TOKEN_LENGTH} tokens.")
     input_ids = input_ids.to(model.device)
 
-    streamer = TextIteratorStreamer(tokenizer, timeout=10.0, skip_prompt=True, skip_special_tokens=True)
+    streamer = TextIteratorStreamer(tokenizer, timeout=30.0, skip_prompt=True, skip_special_tokens=True)
     generate_kwargs = dict(
-        {"input_ids": input_ids},
+        input_ids=input_ids,  # Fixed parameter passing
         streamer=streamer,
         max_new_tokens=max_new_tokens,
-        do_sample=False,
-        num_beams=1,
+        do_sample=True,  # Enable sampling
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
         repetition_penalty=repetition_penalty,
         eos_token_id=tokenizer.eos_token_id
     )
-    t = Thread(target=model.generate, kwargs=generate_kwargs)
-    t.start()
+    
+    try:
+        t = Thread(target=model.generate, kwargs=generate_kwargs)
+        t.start()
+    except Exception as e:
+        yield f"Error: {str(e)}"
+        return
 
     outputs = []
     for text in streamer:
         outputs.append(text)
-        yield "".join(outputs).replace("<|EOT|>","")
+        yield "".join(outputs).replace("回答道", "")  # Keep if you want to remove specific phrases
 
-
+# Rest of the Gradio interface remains the same
 chat_interface = gr.ChatInterface(
     fn=generate,
     additional_inputs=[
@@ -84,13 +91,13 @@ chat_interface = gr.ChatInterface(
             step=1,
             value=DEFAULT_MAX_NEW_TOKENS,
         ),
-        # gr.Slider(
-        #     label="Temperature",
-        #     minimum=0,
-        #     maximum=4.0,
-        #     step=0.1,
-        #     value=0,
-        # ),
+        gr.Slider(
+            label="Temperature",
+            minimum=0,
+            maximum=1.0,  # Adjusted to typical temperature range
+            step=0.1,
+            value=0.6,
+        ),
         gr.Slider(
             label="Top-p (nucleus sampling)",
             minimum=0.05,
@@ -121,7 +128,7 @@ chat_interface = gr.ChatInterface(
     ],
 )
 
-with gr.Blocks(css="style.css") as demo:
+with gr.Blocks() as demo:  # Removed css="style.css" unless you have the file
     gr.Markdown(DESCRIPTION)
     chat_interface.render()
 
