@@ -11,26 +11,23 @@ DEFAULT_MAX_NEW_TOKENS = 1024
 MAX_INPUT_TOKEN_LENGTH = int(os.getenv("MAX_INPUT_TOKEN_LENGTH", "4096"))
 
 DESCRIPTION = """\
-# DeepSeek-6.7B-Chat
+# DeepSeek-6.7B-Chat (CPU Version)
 
 This Space demonstrates model [DeepSeek-Coder](https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct) by DeepSeek.
+**Running on CPU - Expect slower response times**
 """
 
-if not torch.cuda.is_available():
-    DESCRIPTION += "\n<p>Running on CPU 🥶 This demo does not work on CPU.</p>"
+# Load model with CPU optimizations
+model_id = "deepseek-ai/deepseek-coder-6.7b-instruct"
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    torch_dtype=torch.float32,  # Use float32 for CPU compatibility
+    device_map="auto",           # Let accelerate handle device placement
+    low_cpu_mem_usage=True       # Reduce memory footprint
+)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer.use_default_system_prompt = False
 
-if torch.cuda.is_available():
-    model_id = "deepseek-ai/deepseek-coder-6.7b-instruct"
-    # Use float16 for better memory efficiency
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16,  # Changed to float16
-        device_map="auto"
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    tokenizer.use_default_system_prompt = False
-
-#@spaces.GPU  # Comment/remove this if running locally
 def generate(
     message: str,
     chat_history: list,
@@ -48,18 +45,18 @@ def generate(
         conversation.extend([{"role": "user", "content": user}, {"role": "assistant", "content": assistant}])
     conversation.append({"role": "user", "content": message})
 
-    input_ids = AutoTokenizer.apply_chat_template(conversation, return_tensors="pt", add_generation_prompt=True)
+    input_ids = tokenizer.apply_chat_template(conversation, return_tensors="pt", add_generation_prompt=True)
     if input_ids.shape[1] > MAX_INPUT_TOKEN_LENGTH:
         input_ids = input_ids[:, -MAX_INPUT_TOKEN_LENGTH:]
-        print(f"Trimmed input from {MAX_INPUT_TOKEN_LENGTH} tokens.")
+        print(f"Trimmed input to {MAX_INPUT_TOKEN_LENGTH} tokens.")
     input_ids = input_ids.to(model.device)
 
-    streamer = TextIteratorStreamer(tokenizer, timeout=30.0, skip_prompt=True, skip_special_tokens=True)
+    streamer = TextIteratorStreamer(tokenizer, timeout=300.0, skip_prompt=True, skip_special_tokens=True)  # Increased timeout for CPU
     generate_kwargs = dict(
-        input_ids=input_ids,  # Fixed parameter passing
+        input_ids=input_ids,
         streamer=streamer,
         max_new_tokens=max_new_tokens,
-        do_sample=True,  # Enable sampling
+        do_sample=True,
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
@@ -77,9 +74,8 @@ def generate(
     outputs = []
     for text in streamer:
         outputs.append(text)
-        yield "".join(outputs).replace("回答道", "")  # Keep if you want to remove specific phrases
+        yield "".join(outputs).replace("回答道", "")
 
-# Rest of the Gradio interface remains the same
 chat_interface = gr.ChatInterface(
     fn=generate,
     additional_inputs=[
@@ -94,7 +90,7 @@ chat_interface = gr.ChatInterface(
         gr.Slider(
             label="Temperature",
             minimum=0,
-            maximum=1.0,  # Adjusted to typical temperature range
+            maximum=1.0,
             step=0.1,
             value=0.6,
         ),
@@ -122,15 +118,15 @@ chat_interface = gr.ChatInterface(
     ],
     stop_btn=None,
     examples=[
-        ["implement snake game using pygame"],
-        ["Can you explain briefly to me what is the Python programming language?"],
-        ["write a program to find the factorial of a number"],
+        ["Implement a simple calculator in Python"],
+        ["Explain recursion with a simple example"],
+        ["Write a Python function to reverse a string"],
     ],
 )
 
-with gr.Blocks() as demo:  # Removed css="style.css" unless you have the file
+with gr.Blocks() as demo:
     gr.Markdown(DESCRIPTION)
     chat_interface.render()
 
 if __name__ == "__main__":
-    demo.queue().launch(share=True)
+    demo.queue().launch(server_name="0.0.0.0", server_port=7860)
